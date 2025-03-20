@@ -7,7 +7,7 @@ import numpy as np
 import heapq , math , random , yaml
 import scipy.interpolate as si
 import sys , threading , time
-
+from visualization_msgs.msg import Marker, MarkerArray
 
 with open(r"src/ROS2-FrontierBaseExplorationForAutonomousRobot/autonomous_exploration/config/params.yaml", 'r') as file:
     params = yaml.load(file, Loader=yaml.FullLoader)
@@ -150,25 +150,30 @@ def pure_pursuit(current_x, current_y, current_heading, path, index):
     return v,desired_steering_angle,index
 
 def frontierB(matrix):
+    frontier_points = []
     for i in range(len(matrix)):
         for j in range(len(matrix[i])):
             if matrix[i][j] == 0.0:
                 if i > 0 and matrix[i-1][j] < 0:
                     matrix[i][j] = 2
+                    frontier_points.append((i, j))
                 elif i < len(matrix)-1 and matrix[i+1][j] < 0:
                     matrix[i][j] = 2
+                    frontier_points.append((i, j))
                 elif j > 0 and matrix[i][j-1] < 0:
                     matrix[i][j] = 2
+                    frontier_points.append((i, j))
                 elif j < len(matrix[i])-1 and matrix[i][j+1] < 0:
                     matrix[i][j] = 2
-    return matrix
+                    frontier_points.append((i, j))
+    return matrix, frontier_points
 
 def assign_groups(matrix):
     group = 1
     groups = {}
-    for i in range(len(matrix)):
-        for j in range(len(matrix[0])):
-            if matrix[i][j] == 2:
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            if matrix[i, j] == 2:  # Ensure proper indexing
                 group = dfs(matrix, i, j, group, groups)
     return matrix, groups
 
@@ -176,23 +181,23 @@ def dfs(matrix, i, j, group, groups):
     stack = [(i, j)]
     while stack:
         x, y = stack.pop()
-        if x < 0 or x >= len(matrix) or y < 0 or y >= len(matrix[0]):
+        if x < 0 or x >= matrix.shape[0] or y < 0 or y >= matrix.shape[1]:
             continue
-        if matrix[x][y] != 2:
+        if matrix[x, y] != 2:  # Ensure proper indexing
             continue
         if group in groups:
             groups[group].append((x, y))
         else:
             groups[group] = [(x, y)]
-        matrix[x][y] = 0
+        matrix[x, y] = 0  # Ensure proper indexing
         stack.append((x + 1, y))
         stack.append((x - 1, y))
         stack.append((x, y + 1))
         stack.append((x, y - 1))
-        stack.append((x + 1, y + 1)) # bottom right diagonal
-        stack.append((x - 1, y - 1)) # top left diagonal
-        stack.append((x - 1, y + 1)) # top right diagonal
-        stack.append((x + 1, y - 1)) # bottom left diagonal
+        stack.append((x + 1, y + 1))  # bottom right diagonal
+        stack.append((x - 1, y - 1))  # top left diagonal
+        stack.append((x - 1, y + 1))  # top right diagonal
+        stack.append((x + 1, y - 1))  # bottom left diagonal
     return group + 1
 
 def fGroups(groups):
@@ -337,17 +342,41 @@ class navigationControl(Node):
         self.subscription = self.create_subscription(Odometry,'odom',self.odom_callback,10)
         self.subscription = self.create_subscription(LaserScan,'scan',self.scan_callback,10)
         self.publisher = self.create_publisher(Twist, 'cmd_vel', 10)
-        print("[BILGI] KESİF MODU AKTİF")
-        self.kesif = True
-        threading.Thread(target=self.exp).start() #Kesif fonksiyonunu thread olarak calistirir.
-        
+        self.marker_publisher = self.create_publisher(MarkerArray, 'frontier_markers', 10)
+        print("[INFO] EXPLORATION MODE ACTIVE")
+        self.exploration = True
+        threading.Thread(target=self.exp).start() # Run the exploration function as a thread.
+
+    def publish_frontier(self, frontier_points):
+        marker_array = MarkerArray()
+        for i, point in enumerate(frontier_points):
+            marker = Marker()
+            marker.header.frame_id = "map"
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = "frontiers"
+            marker.id = i
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+            marker.pose.position.x = point[0]
+            marker.pose.position.y = point[1]
+            marker.pose.position.z = 0
+            marker.scale.x = 0.2
+            marker.scale.y = 0.2
+            marker.scale.z = 0.2
+            marker.color.a = 1.0
+            marker.color.r = 0.0
+            marker.color.g = 1.0
+            marker.color.b = 0.0
+            marker_array.markers.append(marker)
+        self.marker_publisher.publish(marker_array)
+
     def exp(self):
         twist = Twist()
-        while True: #Sensor verileri gelene kadar bekle.
+        while True: # Wait until sensor data arrives.
             if not hasattr(self,'map_data') or not hasattr(self,'odom_data') or not hasattr(self,'scan_data'):
                 time.sleep(0.1)
                 continue
-            if self.kesif == True:
+            if self.exploration == True:
                 if isinstance(pathGlobal, int) and pathGlobal == 0:
                     column = int((self.x - self.originX)/self.resolution)
                     row = int((self.y- self.originY)/self.resolution)
@@ -356,19 +385,19 @@ class navigationControl(Node):
                 else:
                     self.path = pathGlobal
                 if isinstance(self.path, int) and self.path == -1:
-                    print("[BILGI] KESİF TAMAMLANDI")
+                    print("[INFO] EXPLORATION COMPLETED")
                     sys.exit()
                 self.c = int((self.path[-1][0] - self.originX)/self.resolution) 
                 self.r = int((self.path[-1][1] - self.originY)/self.resolution) 
-                self.kesif = False
+                self.exploration = False
                 self.i = 0
-                print("[BILGI] YENI HEDEF BELİRLENDI")
+                print("[INFO] NEW TARGET SET")
                 t = pathLength(self.path)/speed
-                t = t - 0.2 #x = v * t formülüne göre hesaplanan sureden 0.2 saniye cikarilir. t sure sonra kesif fonksiyonu calistirilir.
-                self.t = threading.Timer(t,self.target_callback) #Hedefe az bir sure kala kesif fonksiyonunu calistirir.
+                t = t - 0.2 # According to the formula x = v * t, subtract 0.2 seconds from the calculated time. The exploration function is executed after t time.
+                self.t = threading.Timer(t,self.target_callback) # Run the exploration function just before reaching the target.
                 self.t.start()
             
-            #Rota Takip Blok Baslangic
+            # Route Tracking Block Start
             else:
                 v , w = localControl(self.scan)
                 if v == None:
@@ -376,14 +405,14 @@ class navigationControl(Node):
                 if(abs(self.x - self.path[-1][0]) < target_error and abs(self.y - self.path[-1][1]) < target_error):
                     v = 0.0
                     w = 0.0
-                    self.kesif = True
-                    print("[BILGI] HEDEFE ULASILDI")
-                    self.t.join() #Thread bitene kadar bekle.
+                    self.exploration = True
+                    print("[INFO] TARGET REACHED")
+                    self.t.join() # Wait until the thread finishes.
                 twist.linear.x = v
                 twist.angular.z = w
                 self.publisher.publish(twist)
                 time.sleep(0.1)
-            #Rota Takip Blok Bitis
+            # Route Tracking Block End
 
     def target_callback(self):
         exploration(self.data,self.width,self.height,self.resolution,self.c,self.r,self.originX,self.originY)
@@ -394,20 +423,18 @@ class navigationControl(Node):
 
     def map_callback(self,msg):
         self.map_data = msg
-        self.resolution = self.map_data.info.resolution
-        self.originX = self.map_data.info.origin.position.x
-        self.originY = self.map_data.info.origin.position.y
-        self.width = self.map_data.info.width
-        self.height = self.map_data.info.height
-        self.data = self.map_data.data
+        self.data = np.array(msg.data).reshape(msg.info.height, msg.info.width)
+        self.width = msg.info.width
+        self.height = msg.info.height
+        self.resolution = msg.info.resolution
+        self.originX = msg.info.origin.position.x
+        self.originY = msg.info.origin.position.y
 
     def odom_callback(self,msg):
         self.odom_data = msg
         self.x = msg.pose.pose.position.x
         self.y = msg.pose.pose.position.y
-        self.yaw = euler_from_quaternion(msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,
-        msg.pose.pose.orientation.z,msg.pose.pose.orientation.w)
-
+        self.yaw = euler_from_quaternion(msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -416,5 +443,5 @@ def main(args=None):
     navigation_control.destroy_node()
     rclpy.shutdown()
 
-if __name__ == '__main__':
+if __name__ == '__':
     main()
