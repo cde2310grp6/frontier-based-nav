@@ -9,7 +9,7 @@ import scipy.interpolate as si
 import sys , threading , time
 
 
-with open("src/autonomous_exploration/config/params.yaml", 'r') as file:
+with open(r"src/ROS2-FrontierBaseExplorationForAutonomousRobot/autonomous_exploration/config/params.yaml", 'r') as file:
     params = yaml.load(file, Loader=yaml.FullLoader)
 
 lookahead_distance = params["lookahead_distance"]
@@ -173,23 +173,26 @@ def assign_groups(matrix):
     return matrix, groups
 
 def dfs(matrix, i, j, group, groups):
-    if i < 0 or i >= len(matrix) or j < 0 or j >= len(matrix[0]):
-        return group
-    if matrix[i][j] != 2:
-        return group
-    if group in groups:
-        groups[group].append((i, j))
-    else:
-        groups[group] = [(i, j)]
-    matrix[i][j] = 0
-    dfs(matrix, i + 1, j, group, groups)
-    dfs(matrix, i - 1, j, group, groups)
-    dfs(matrix, i, j + 1, group, groups)
-    dfs(matrix, i, j - 1, group, groups)
-    dfs(matrix, i + 1, j + 1, group, groups) # sağ alt çapraz
-    dfs(matrix, i - 1, j - 1, group, groups) # sol üst çapraz
-    dfs(matrix, i - 1, j + 1, group, groups) # sağ üst çapraz
-    dfs(matrix, i + 1, j - 1, group, groups) # sol alt çapraz
+    stack = [(i, j)]
+    while stack:
+        x, y = stack.pop()
+        if x < 0 or x >= len(matrix) or y < 0 or y >= len(matrix[0]):
+            continue
+        if matrix[x][y] != 2:
+            continue
+        if group in groups:
+            groups[group].append((x, y))
+        else:
+            groups[group] = [(x, y)]
+        matrix[x][y] = 0
+        stack.append((x + 1, y))
+        stack.append((x - 1, y))
+        stack.append((x, y + 1))
+        stack.append((x, y - 1))
+        stack.append((x + 1, y + 1)) # bottom right diagonal
+        stack.append((x - 1, y - 1)) # top left diagonal
+        stack.append((x - 1, y + 1)) # top right diagonal
+        stack.append((x + 1, y - 1)) # bottom left diagonal
     return group + 1
 
 def fGroups(groups):
