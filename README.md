@@ -39,6 +39,8 @@ model, for example, using the following command:
 
 `ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py`
 
+`ros2 launch nav2_bringup tb3_simulation_launch.py slam:=True`
+
 3 - Once the simulation environment is running, run the autonomous_exploration 
 
 package using the following command:
